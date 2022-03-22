@@ -1,0 +1,18 @@
+banned_subs:
+  - 
+suspicious_subs:
+  - 
+banned_user_descriptions: 
+  - 
+removal_message: ''
+modded_communities:
+  -
+watched_communities:
+  - 
+
+db_adminpass: 
+db_user: 
+db_pass: 
+db_hostname: 'localhost'
+db_port: '5432'
+db_name: 'botomod'
