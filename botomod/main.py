@@ -1,11 +1,12 @@
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Union
 import praw, yaml
+from prawcore.exceptions import NotFound
 from sqlalchemy.orm import Session
 from database import init_connection_engine
 from models import Subreddit, RedditSubmission, RedditComment
 from models import RedditUser, RedditUserSnapshot
-
 
 with open("config.yaml") as config_file:
     config = yaml.safe_load(config_file)
@@ -40,10 +41,13 @@ def save_to_db(
     """
 
     with Session(db) as session, session.begin():
-        author = item.author
-        subreddit = item.subreddit
+        try:
+            author = item.author
+            author.name
+        except AttributeError:
+            author = SimpleNamespace(name="[deleted]")
 
-        # Variables for passing to database session
+        subreddit = item.subreddit
 
         # Gets any subreddits from db that match the one containing our item
         # If it doesn't exist in the database, this creates it
@@ -64,49 +68,71 @@ def save_to_db(
         # Same logic as above but for author of item
         reddit_user = session.query(RedditUser).get(author.name)
         if not reddit_user:
-            reddit_user = RedditUser(
-                reddit_username = author.name,
-                created_utc = datetime.utcfromtimestamp(author.created_utc)
-            )
+            try:
+                reddit_user = RedditUser(
+                    reddit_username = author.name,
+                    created_utc = datetime.utcfromtimestamp(
+                        author.created_utc
+                    )
+                )
+            except NotFound:
+                reddit_user = RedditUser(
+                    reddit_username = author.name,
+                    created_utc = None
+                )
             session.add(reddit_user)
 
-        # We don't conditionally create user snapshots
-        # since we pretty much always want a new one
-        reddit_user_snapshot = RedditUserSnapshot(
-            reddit_user = reddit_user,
-            reddit_username = author.name,
-            snapshot_utc = datetime.utcnow(),
-            link_karma = author.link_karma,
-            comment_karma = author.comment_karma,
-            has_verified_email = author.has_verified_email,
-            subreddit_title = author.subreddit.title,
-            subreddit_description = author.subreddit.public_description,
-            subreddit_nsfw = author.subreddit.over_18
-        )
+        # We don't conditionally create user snapshots since we pretty much 
+        # always want a new one, unless the user is suspended
+        # (in which case praw will raise NotFound)
+        try:
+            reddit_user_snapshot = RedditUserSnapshot(
+                reddit_user = reddit_user,
+                reddit_username = author.name,
+                snapshot_utc = datetime.utcnow(),
+                link_karma = author.link_karma,
+                comment_karma = author.comment_karma,
+                has_verified_email = author.has_verified_email,
+                subreddit_title = author.subreddit.title,
+                subreddit_description = author.subreddit.public_description,
+                subreddit_nsfw = author.subreddit.over_18
+            )
+        except NotFound:
+            reddit_user_snapshot = None
 
-        # If the item is a comment, then our "submission" should refer to the
-        # submission that the comment belongs to. 
+        # If the item is a comment, then our "submission" refers to the
+        # post that the comment belongs to. 
         if type == "submission":
             submission = item
             submission_user = reddit_user
         elif type == "comment":
             comment = item
             submission = comment.submission
-            submission_user = session.query(RedditUser).get(submission.author.name)
+            submission_user = session.query(RedditUser).get(
+                submission.author.name
+            )
             if not submission_user:
-                submission_user = RedditUser(
-                    reddit_username = submission.author.name,
-                    created_utc = datetime.utcfromtimestamp(
-                        submission.author.created_utc
+                try: 
+                    submission_user = RedditUser(
+                        reddit_username = submission.author.name,
+                        created_utc = datetime.utcfromtimestamp(
+                            submission.author.created_utc
+                        )
                     )
-                )
+                except NotFound:
+                    submission_user = RedditUser(
+                        reddit_username = submission.author.name,
+                        created_utc = None
+                    )
                 session.add(submission_user)
 
         reddit_submission = session.query(RedditSubmission).get(submission.id)
         if not reddit_submission:
             reddit_submission = RedditSubmission(
                 id = submission.id,
-                created_utc = datetime.utcfromtimestamp(submission.created_utc),
+                created_utc = datetime.utcfromtimestamp(
+                    submission.created_utc
+                ),
                 reddit_username = author.name,
                 reddit_user = submission_user,
                 subreddit_display_name = subreddit.display_name,
@@ -124,7 +150,9 @@ def save_to_db(
             reddit_comment = session.query(RedditComment).get(comment.id)
             if not reddit_comment:
                 reddit_comment = RedditComment(
-                    created_utc = datetime.utcfromtimestamp(comment.created_utc),
+                    created_utc = datetime.utcfromtimestamp(
+                        comment.created_utc
+                    ),
                     id = comment.id,
                     body = comment.body,
                     reddit_username = author.name,
@@ -136,8 +164,8 @@ def save_to_db(
                 )
 
         # Add everything to DB
-
-        reddit_user.reddit_user_snapshots.append(reddit_user_snapshot)
+        if reddit_user_snapshot:
+            reddit_user.reddit_user_snapshots.append(reddit_user_snapshot)
 
         submission_user.reddit_submissions.append(reddit_submission)
         reddit_subreddit.reddit_submissions.append(reddit_submission)
@@ -181,7 +209,7 @@ def main():
         process_comments(comments)
 
 def get_stream():
-    """_summary_
+    """
 
     Returns:
         praw.reddit.Subreddit.stream: The stream of all watched subreddits
