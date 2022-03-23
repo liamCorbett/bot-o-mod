@@ -1,18 +1,31 @@
-banned_subs:
-  - 
-suspicious_subs:
-  - 
-banned_user_descriptions: 
-  - 
-removal_message: ''
-modded_communities:
-  -
-watched_communities:
-  - 
-
+db_adminuser: 'postgres'
 db_adminpass: 
-db_user: 
+db_user: 'botomod'
 db_pass: 
 db_hostname: 'localhost'
 db_port: '5432'
-db_name: 'botomod'
+db_name: 'ayy'
+
+
+watched_subreddits:
+  - cats
+
+do_not_scan_users:
+  - automoderator
+
+
+report_subs:
+  - reportedsub
+filter_subs:
+  - filteredsub
+remove_subs:
+  - removedsub
+
+
+
+report_desc:
+  - ''
+filter_desc:
+  - '.nlyf.ns'
+remove_desc:
+  - ''

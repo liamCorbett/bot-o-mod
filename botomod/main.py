@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Union
 import praw, yaml
 from sqlalchemy.orm import Session
 from database import init_connection_engine, create_tables
@@ -8,23 +9,29 @@ from database import RedditUser, RedditUserSnapshot
 
 with open("config.yaml") as config_file:
     config = yaml.safe_load(config_file)
-    client_id = config["client_id"]
-    client_secret = config["client_secret"]
-    username = config["username"]
-    password = config["password"]
-    user_agent = config["user_agent"]
-    mod_sub = config["mod_sub"]
-    banned_subs = config["banned_subs"]
-    suspicious_subs = config["suspicious_subs"]
-    banned_user_descriptions = config["banned_user_descriptions"]
-    removal_message = config["removal_message"]
-    watched_communities = config["watched_communities"]
-    database_engine = config["database_engine"]
 
-# See https://praw.readthedocs.io/en/stable/getting_started/configuration/prawini.html#praw-ini
+    # Communities to stream comments and submissions from
+    watched_subreddits = config["watched_subreddits"]
+
+    # Users to omit from scans (only maintains enough info for bot operation)
+    do_not_scan_users = config["do_not_scan_users"]
+
+    # User activity in these subreddits prompt action from the bot
+    report_subs = config["report_subs"] # Report 
+    filter_subs = config["filter_subs"] # Report AND remove
+    remove_subs = config["remove_subs"] # Remove only; no report (try 2 avoid)
+
+    # User descriptions which match the following text prompt action from bot
+    report_desc = config["report_desc"]
+    filter_desc = config["filter_desc"]
+    remove_desc = config["remove_desc"]
+
+# See https://praw.readthedocs.io/en/stable/getting_started/configuration/prawini.html
 reddit = praw.Reddit("MeetBot")
 
-def save_to_db(item, type):
+def save_to_db(
+    item: Union[praw.Reddit.comment, praw.Reddit.submission], 
+    type: str):
     """Saves item to database.
 
     Args:
@@ -38,6 +45,8 @@ def save_to_db(item, type):
 
         # Variables for passing to database session
 
+        # Gets any subreddits from db that match the one containing our item
+        # If it doesn't exist in the database, this creates it
         reddit_subreddit = session.query(Subreddit).get(subreddit.display_name)
         if not reddit_subreddit:
             reddit_subreddit = Subreddit(
@@ -52,6 +61,7 @@ def save_to_db(item, type):
             )
             session.add(reddit_subreddit)
 
+        # Same logic as above but for author of item
         reddit_user = session.query(RedditUser).get(author.name)
         if not reddit_user:
             reddit_user = RedditUser(
@@ -60,6 +70,8 @@ def save_to_db(item, type):
             )
             session.add(reddit_user)
 
+        # We don't conditionally create user snapshots
+        # since we pretty much always want a new one
         reddit_user_snapshot = RedditUserSnapshot(
             reddit_user = reddit_user,
             reddit_username = author.name,
@@ -72,6 +84,8 @@ def save_to_db(item, type):
             subreddit_nsfw = author.subreddit.over_18
         )
 
+        # If the item is a comment, then our "submission" should refer to the
+        # submission that the comment belongs to. 
         if type == "submission":
             submission = item
             submission_user = reddit_user
@@ -167,7 +181,12 @@ def main():
         process_comments(comments)
 
 def get_stream():
-    return reddit.subreddit("+".join(watched_communities)).stream
+    """_summary_
+
+    Returns:
+        praw.reddit.Subreddit.stream: The stream of all watched subreddits
+    """
+    return reddit.subreddit("+".join(watched_subreddits)).stream
 
 if __name__ == "__main__":
     global db # sqlalchemy database

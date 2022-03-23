@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, engine
 from sqlalchemy import Column, ForeignKey
 from sqlalchemy.types import Integer, String, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy_utils import database_exists, create_database
+from sqlalchemy_utils import database_exists
 
 
 with open("config.yaml") as config_file:
@@ -65,8 +65,10 @@ class RedditUserSnapshot(Base):
     comment_karma = Column(Integer)
     has_verified_email = Column(Boolean)
     subreddit_title = Column(String)
-    subreddit_description = (String)
-    subreddit_nsfw = (String)
+    subreddit_description = Column(String)
+    subreddit_nsfw = Column(String)
+    # TODO: estimated_age = Column(Integer)
+    # TODO: estimated_gender = Column(String)
 
 
 class RedditUser(Base):
