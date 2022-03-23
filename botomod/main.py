@@ -2,9 +2,9 @@ from datetime import datetime
 from typing import Union
 import praw, yaml
 from sqlalchemy.orm import Session
-from database import init_connection_engine, create_tables
-from database import Subreddit, RedditSubmission, RedditComment
-from database import RedditUser, RedditUserSnapshot
+from database import init_connection_engine
+from models import Subreddit, RedditSubmission, RedditComment
+from models import RedditUser, RedditUserSnapshot
 
 
 with open("config.yaml") as config_file:
@@ -191,5 +191,4 @@ def get_stream():
 if __name__ == "__main__":
     global db # sqlalchemy database
     db = init_connection_engine()
-    create_tables(db) # creates if none exist*
     main()
