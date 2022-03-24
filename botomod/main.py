@@ -1,8 +1,7 @@
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Union
-import praw, yaml
-from prawcore.exceptions import NotFound
+import praw, prawcore, yaml
 from sqlalchemy.orm import Session
 from database import init_connection_engine
 from models import Subreddit, RedditSubmission, RedditComment
@@ -30,61 +29,110 @@ with open("config.yaml") as config_file:
 # See https://praw.readthedocs.io/en/stable/getting_started/configuration/prawini.html
 reddit = praw.Reddit("MeetBot")
 
-def save_to_db(
-    item: Union[praw.Reddit.comment, praw.Reddit.submission], 
-    type: str):
+def get_or_add(session, model, key, **properties):
+    instance = session.query(model).get(key)
+    if instance:
+        return instance
+    else:
+        instance = model(**properties)
+        session.add(instance)
+        return instance
+
+# TODO: this probably isn't very elegant
+def get_or_add_reddit_user(session, redditor):
+    """Gets or adds a new user to the database; handles missing users
+
+    Args:
+        session: The SQLAlchemy database session
+        redditor:
+
+    Returns:
+        An instance of RedditUser
+    """
+    try:
+        return get_or_add(session, RedditUser, redditor.name, 
+            reddit_username=redditor.name, 
+            created_utc=datetime.utcfromtimestamp(redditor.created_utc)
+        )
+    except (prawcore.exceptions.NotFound, AttributeError):
+        return get_or_add(session, RedditUser, "[missing]", 
+            reddit_username="[missing]", 
+            created_utc=None
+        )
+
+def get_or_append(*, session, model, key, properties, append_to, by_rel):
+    """Gets instance of model; or creates and appends a new one if none found
+
+    Args:
+        session: the SQLAlchemy database session
+        model: the model to search in, or instantiate
+        key: the primary key to search for
+        properties: a dict of properties to instantiate 
+        append_to: a list of parent instances to add new child to
+        rel: 
+
+    Returns:
+        An instance of child_model
+    """
+    instance = session.query(model).get(key)
+    if instance:
+        return instance
+    else:
+        instance = model(**properties)
+        for parent in append_to:
+            getattr(parent, by_rel).append(instance)
+        return instance
+
+
+def save_to_db(item: Union[praw.models.Comment, praw.models.Submission]):
     """Saves item to database.
 
     Args:
         item: the praw submission or praw comment to save to the database
-        type: "submission" or "comment", depending on the item being passed
     """
 
-    with Session(db) as session, session.begin():
-        try:
-            author = item.author
-            author.name
-        except AttributeError:
-            author = SimpleNamespace(name="[deleted]")
+    # WARNING: PRAW objects are lazy
+    author = item.author              # PRAW Redditor object
+    subreddit = item.subreddit        # PRAW Subreddit object
 
-        subreddit = item.subreddit
+    if isinstance(item, praw.models.Comment):
+        type = "comment"
+        submission = item.submission
+        comment = item
+    elif isinstance(item, praw.models.Submission):
+        type = "submission"
+        submission = item
+    else:
+        raise TypeError("Item isn't of type Comment or Submission")
+
+    with Session(db) as session, session.begin():
 
         # Gets any subreddits from db that match the one containing our item
         # If it doesn't exist in the database, this creates it
-        reddit_subreddit = session.query(Subreddit).get(subreddit.display_name)
-        if not reddit_subreddit:
-            reddit_subreddit = Subreddit(
-                created_utc = datetime.utcfromtimestamp(subreddit.created_utc),
-                name = subreddit.name,
-                display_name = subreddit.display_name,
-                id = subreddit.id,
-                description = subreddit.description,
-                public_description = subreddit.public_description,
-                subscribers = subreddit.subscribers,
-                over18 = subreddit.over18
-            )
-            session.add(reddit_subreddit)
+        reddit_subreddit = get_or_add(
+            # Get
+            session = session, 
+            model = Subreddit, 
+            key = subreddit.display_name, 
+            # Add
+            created_utc = datetime.utcfromtimestamp(subreddit.created_utc),
+            name = subreddit.name,
+            display_name = subreddit.display_name,
+            id = subreddit.id,
+            description = subreddit.description,
+            public_description = subreddit.public_description,
+            subscribers = subreddit.subscribers,
+            over18 = subreddit.over18
+        )
 
         # Same logic as above but for author of item
-        reddit_user = session.query(RedditUser).get(author.name)
-        if not reddit_user:
-            try:
-                reddit_user = RedditUser(
-                    reddit_username = author.name,
-                    created_utc = datetime.utcfromtimestamp(
-                        author.created_utc
-                    )
-                )
-            except NotFound:
-                reddit_user = RedditUser(
-                    reddit_username = author.name,
-                    created_utc = None
-                )
-            session.add(reddit_user)
+        reddit_user = get_or_add_reddit_user(
+            session = session, 
+            redditor = author
+        )
 
-        # We don't conditionally create user snapshots since we pretty much 
-        # always want a new one, unless the user is suspended
-        # (in which case praw will raise NotFound)
+        # No need for get_or_add since we basically always want to create a
+        # snapshot, unless the user is deleted / suspended and has no data.
         try:
             reddit_user_snapshot = RedditUserSnapshot(
                 reddit_user = reddit_user,
@@ -97,81 +145,64 @@ def save_to_db(
                 subreddit_description = author.subreddit.public_description,
                 subreddit_nsfw = author.subreddit.over_18
             )
-        except NotFound:
-            reddit_user_snapshot = None
+            reddit_user.reddit_user_snapshots.append(reddit_user_snapshot)
+        except AttributeError:
+            pass
 
-        # If the item is a comment, then our "submission" refers to the
-        # post that the comment belongs to. 
-        if type == "submission":
-            submission = item
-            submission_user = reddit_user
-        elif type == "comment":
-            comment = item
-            submission = comment.submission
-            submission_user = session.query(RedditUser).get(
-                submission.author.name
+        # If present: adds parent submission's user to database
+        if type == "comment":
+            submission_user = get_or_add_reddit_user(
+                session = session,
+                redditor = submission.author
             )
-            if not submission_user:
-                try: 
-                    submission_user = RedditUser(
-                        reddit_username = submission.author.name,
-                        created_utc = datetime.utcfromtimestamp(
-                            submission.author.created_utc
-                        )
-                    )
-                except NotFound:
-                    submission_user = RedditUser(
-                        reddit_username = submission.author.name,
-                        created_utc = None
-                    )
-                session.add(submission_user)
 
-        reddit_submission = session.query(RedditSubmission).get(submission.id)
-        if not reddit_submission:
-            reddit_submission = RedditSubmission(
-                id = submission.id,
-                created_utc = datetime.utcfromtimestamp(
-                    submission.created_utc
-                ),
-                reddit_username = author.name,
-                reddit_user = submission_user,
-                subreddit_display_name = subreddit.display_name,
-                subreddit = reddit_subreddit,
-                title = submission.title,
-                selftext = submission.selftext,
-                permalink = submission.permalink,
-                url = submission.url,
-                link_flair_text = submission.link_flair_text,
-                is_self = submission.is_self,
-                over_18 = submission.over_18
-            )
+        submission_properties = {
+            'id': submission.id,
+            'reddit_username': submission.author.name,
+            'reddit_user': reddit_user if type == "submission" 
+                else submission_user,
+            'subreddit_display_name': subreddit.display_name,
+            'subreddit': reddit_subreddit,
+            'title': submission.title,
+            'selftext': submission.selftext,
+            'permalink': submission.permalink,
+            'url': submission.url,
+            'link_flair_text': submission.link_flair_text,
+            'is_self': submission.is_self,
+            'over_18': submission.over_18
+        }
+
+        reddit_submission = get_or_append(
+            session = session,       
+            model = RedditSubmission, 
+            key = submission.id,
+            append_to = [reddit_subreddit, reddit_user],
+            by_rel = 'reddit_submissions',
+            properties = submission_properties
+        )
 
         if type == "comment":
-            reddit_comment = session.query(RedditComment).get(comment.id)
-            if not reddit_comment:
-                reddit_comment = RedditComment(
-                    created_utc = datetime.utcfromtimestamp(
+            get_or_append(
+                session = session,
+                model = RedditComment,
+                key = comment.id,
+                append_to = [reddit_submission],
+                by_rel = 'reddit_comments',
+                properties = {
+                    'created_utc': datetime.utcfromtimestamp(
                         comment.created_utc
                     ),
-                    id = comment.id,
-                    body = comment.body,
-                    reddit_username = author.name,
-                    reddit_user = reddit_user,
-                    reddit_submission_id = submission.id,
-                    reddit_submission = reddit_submission,
-                    permalink = comment.permalink,
-                    parent_id = comment.parent_id
-                )
-
-        # Add everything to DB
-        if reddit_user_snapshot:
-            reddit_user.reddit_user_snapshots.append(reddit_user_snapshot)
-
-        submission_user.reddit_submissions.append(reddit_submission)
-        reddit_subreddit.reddit_submissions.append(reddit_submission)
-
-        if type == "comment":
-            reddit_user.reddit_comments.append(reddit_comment)
+                    'id': comment.id,
+                    'body': comment.body,
+                    'reddit_username': author.name,
+                    'reddit_user': reddit_user,
+                    'reddit_submission_id': submission.id,
+                    'reddit_submission': reddit_submission,
+                    'permalink': comment.permalink,
+                    'parent_id': comment.parent_id
+                }
+            )
+            
 
 
 def process_submissions(submissions, save=True):
@@ -182,7 +213,7 @@ def process_submissions(submissions, save=True):
         print("POST: ", submission.title)
 
         if save:
-            save_to_db(submission, "submission")
+            save_to_db(submission)
 
 def process_comments(comments, save=True):
     for comment in comments:
@@ -192,7 +223,7 @@ def process_comments(comments, save=True):
         print("COMMENT: ", comment.body)
 
         if save:
-            save_to_db(comment, "comment")
+            save_to_db(comment)
 
 def main():
     submissions = get_stream().submissions(
@@ -210,7 +241,7 @@ def main():
 
 def get_stream():
     """
-
+    
     Returns:
         praw.reddit.Subreddit.stream: The stream of all watched subreddits
     """
