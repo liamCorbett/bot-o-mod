@@ -1,8 +1,9 @@
 import yaml
 from sqlalchemy import create_engine, engine
 from sqlalchemy_utils import database_exists
-from models import Base
+from .models import Base
 
+# TODO: Better way of pulling config into this module
 with open("config.yaml") as config_file:
     config = yaml.safe_load(config_file)
     db_adminpass = config["db_adminpass"]
@@ -11,6 +12,19 @@ with open("config.yaml") as config_file:
     db_hostname = config["db_hostname"]
     db_port = config["db_port"]
     db_name = config["db_name"]
+
+def create_database():
+    temp_engine = create_engine(f"postgresql+psycopg2://postgres:{db_adminpass}@localhost:5432/postgres")
+    with temp_engine.connect() as conn:
+        conn.execute("commit")
+        # Do not substitute user-supplied database names here.
+        conn.execute(
+            f"CREATE DATABASE {db_name};"
+        )
+        conn.execute(
+            f"CREATE USER {db_user} WITH PASSWORD '{db_pass}';"
+            f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user}"
+        )
 
 def init_connection_engine():
     db_config = {"echo": True, "future": True}
@@ -31,15 +45,4 @@ def init_connection_engine():
     Base.metadata.create_all(db, checkfirst=True)
     return db
 
-def create_database():
-    temp_engine = create_engine(f"postgresql+psycopg2://postgres:{db_adminpass}@localhost:5432/postgres")
-    with temp_engine.connect() as conn:
-        conn.execute("commit")
-        # Do not substitute user-supplied database names here.
-        conn.execute(
-            f"CREATE DATABASE {db_name};"
-        )
-        conn.execute(
-            f"CREATE USER {db_user} WITH PASSWORD '{db_pass}';"
-            f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user}"
-        )
+db = init_connection_engine()
