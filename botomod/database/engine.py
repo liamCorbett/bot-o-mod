@@ -1,7 +1,32 @@
+import datetime, logging, os
 import yaml
 from sqlalchemy import create_engine, engine
 from sqlalchemy_utils import database_exists
 from .models import Base
+
+engine_filename = os.path.join(
+    "./logs/sqlalchemy/", 
+    "{0}-engine.log".format(datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+)
+engine_fh = logging.FileHandler(engine_filename, encoding='utf-8')
+engine_fh.setLevel(logging.DEBUG)
+
+engine_logger = logging.getLogger("sqlalchemy.engine")
+engine_logger.setLevel(logging.INFO)
+engine_logger.propagate = False
+engine_logger.addHandler(engine_fh)
+
+pool_filename = os.path.join(
+    "./logs/sqlalchemy/", 
+    "{0}-pool.log".format(datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+)
+pool_fh = logging.FileHandler(pool_filename, encoding='utf-8')
+pool_fh.setLevel(logging.DEBUG)
+
+pool_logger = logging.getLogger("sqlalchemy.pool")
+pool_logger.setLevel(logging.DEBUG)
+pool_logger.propagate = False
+pool_logger.addHandler(pool_fh)
 
 # TODO: Better way of pulling config into this module
 with open("config.yaml") as config_file:
@@ -27,7 +52,7 @@ def create_database():
         )
 
 def init_connection_engine():
-    db_config = {"echo": True, "future": True}
+    db_config = {"echo": False, "future": True}
     # Equivalent URL:
     # postgresql+psycopg2://<db_user>:<db_pass>@<db_host>:<db_port>/<db_name>
     db_url = engine.url.URL.create(

@@ -3,10 +3,10 @@ from typing import Union
 import praw, prawcore
 from sqlalchemy.orm import Session
 
+from .crud import get_or_add, get_or_append
 from .engine import db
 from .models import Comment, Submission, Subreddit
 from .models import Redditor, RedditorSnapshot
-from .util import get_or_add, get_or_append
 
 def get_or_add_redditor(session, redditor: praw.models.Redditor):
     try:

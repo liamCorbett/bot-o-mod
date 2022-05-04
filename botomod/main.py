@@ -1,5 +1,37 @@
-import praw, yaml
+import datetime, logging, os
+import praw, prawcore, yaml
 from database import save_to_db
+
+#
+# LOGGING
+#
+
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# log file handler
+log_time = datetime.datetime.now()
+log_filename = os.path.join(
+    "logs/", "botomod-%s.log" % log_time.strftime("%Y%m%d-%H%M%S")
+)
+fh = logging.FileHandler(log_filename, encoding='utf-8')
+fh.setLevel(logging.INFO)
+fh.setFormatter(formatter)
+
+logger.addHandler(fh)
+
+# log console/stream handler
+sh = logging.StreamHandler()
+sh.setLevel(logging.INFO)
+sh.setFormatter(formatter)
+logger.addHandler(sh)
+
+logging.basicConfig(format='%(asctime)s %(message)s', encoding='utf-8')
+
+#
+# CONFIG
+#
 
 with open("config.yaml") as config_file:
     config = yaml.safe_load(config_file)
@@ -23,12 +55,16 @@ with open("config.yaml") as config_file:
 # See https://praw.readthedocs.io/en/stable/getting_started/configuration/prawini.html
 reddit = praw.Reddit("MeetBot")
 
+#
+# POST / COMMENT PROCESSING
+#
+
 def process_submissions(submissions, save=True):
     for submission in submissions:
         if submission is None:
             break
 
-        print("\n\nPOST: ", submission.title, "\n\n")
+        logger.info("POST: \n\n" + submission.title + "\n\n")
 
         if save:
             save_to_db(submission)
@@ -38,7 +74,7 @@ def process_comments(comments, save=True):
         if comment is None:
             break
 
-        print("\n\nCOMMENT: ", comment.body, "\n\n")
+        logger.info("COMMENT: \n\n" + comment.body + "\n\n")
 
         if save:
             save_to_db(comment)
@@ -51,6 +87,11 @@ def get_stream(watched_subreddits):
     """
     return reddit.subreddit("+".join(watched_subreddits)).stream
 
+
+#
+# LOOP
+#
+
 def main_loop():
     submissions = get_stream(cfg_watched_subreddits).submissions(
         pause_after=-1, 
@@ -62,8 +103,15 @@ def main_loop():
     )
 
     while True:
-        process_submissions(submissions)
-        process_comments(comments)
+        try:
+            process_submissions(submissions)
+        except prawcore.exceptions.NotFound as e:
+            logger.warning("PRAW issued NotFound exception")
+
+        try:
+            process_comments(comments)
+        except prawcore.exceptions.NotFound as e:
+            logger.warning("PRAW issued NotFound exception")
 
 if __name__ == "__main__":
     main_loop()
